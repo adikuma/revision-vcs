@@ -2,12 +2,14 @@
 import argparse
 import sys
 import os
-from .rev_lib.repository import (
+from rev.rev_lib.repository import (
     init_repository, 
     create_blob, 
     update_index,
     commit_changes,
-    get_head_commit
+    get_head_commit,
+    revert_to_commit,
+    get_status
 )
 
 def main():
@@ -25,8 +27,15 @@ def main():
     commit_parser = subparsers.add_parser("commit", help="commit staged changes")
     commit_parser.add_argument("-m", "--message", required=True, help="commit message")
     
-    # log command (simple)
+    # log command
     log_parser = subparsers.add_parser("log", help="show commit history")
+    
+    # status command
+    status_parser = subparsers.add_parser("status", help="show working directory status")
+    
+    # revert command
+    revert_parser = subparsers.add_parser("revert", help="revert to a previous commit")
+    revert_parser.add_argument("commit_hash", help="commit hash to revert to")
     
     # parse arguments
     args = parser.parse_args()
@@ -62,6 +71,26 @@ def main():
             print(f"commit {commit_hash[:7]} (head)")
         else:
             print("no commits yet")
+            
+    elif args.command == "status":
+        status_info = get_status()
+        if not status_info['modified'] and not status_info['untracked']:
+            print("nothing to commit, working directory clean")
+        else:
+            if status_info['modified']:
+                print("changes not staged for commit:")
+                for file in status_info['modified']:
+                    print(f"\tmodified:   {file}")
+            if status_info['untracked']:
+                print("untracked files:")
+                for file in status_info['untracked']:
+                    print(f"\t{file}")
+                    
+    elif args.command == "revert":
+        if revert_to_commit(args.commit_hash):
+            print(f"reverted to commit {args.commit_hash[:7]}")
+        else:
+            print("error: revert failed")
             
     else:
         parser.print_help()

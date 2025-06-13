@@ -42,6 +42,7 @@ def init_repository():
         return False
 
 def read_file(file_path):
+    """read file content as bytes"""
     try:
         with open(file_path, "rb") as file:
             return file.read()
@@ -49,6 +50,7 @@ def read_file(file_path):
         return None
 
 def create_blob(file_path):
+    """create blob object from file content"""
     content = read_file(file_path)
     if content is None:
         return None
@@ -71,6 +73,7 @@ def create_blob(file_path):
     return hex_digest
 
 def update_index(file_path, blob_hash):
+    """update staging area with file info"""
     # get relative path and normalize
     rel_path = os.path.relpath(file_path).replace("\\", "/")
     
@@ -223,8 +226,161 @@ def commit_changes(message, author="user <user@example.com>"):
     commit_hash = create_commit(tree_hash, parent_hash, message, author)
     # update head reference
     update_head_ref(commit_hash)
-    # clear staging area (optional)
+    # clear staging area
     with open(index_file, "w"):
         pass
-    
     return commit_hash
+
+def read_object(sha):
+    """read an object by sha-1 hash and return (obj_type, content)"""
+    obj_path = os.path.join(objects_dir, sha[:2], sha[2:])
+    if not os.path.exists(obj_path):
+        return None, None
+        
+    with open(obj_path, 'rb') as f:
+        compressed = f.read()
+    
+    raw = zlib.decompress(compressed)
+    null_idx = raw.find(b'\0')
+    header = raw[:null_idx].decode()
+    content = raw[null_idx+1:]
+    
+    obj_type, size = header.split()
+    return obj_type, content
+
+def get_commit_tree(commit_hash):
+    """get the tree hash from a commit object"""
+    obj_type, commit_data = read_object(commit_hash)
+    if obj_type != 'commit':
+        return None
+        
+    lines = commit_data.decode().splitlines()
+    for line in lines:
+        if line.startswith('tree '):
+            return line.split()[1]
+    return None
+
+def restore_tree(tree_hash, base_path=''):
+    """restore files from a tree object recursively"""
+    obj_type, tree_data = read_object(tree_hash)
+    if obj_type != 'tree':
+        return
+        
+    # parse tree entries: [mode] [name]\0[20-byte hash]
+    pos = 0
+    while pos < len(tree_data):
+        # find null terminator after filename
+        null_idx = tree_data.find(b'\0', pos)
+        if null_idx == -1:
+            break
+            
+        # parse mode and filename
+        header = tree_data[pos:null_idx].decode()
+        mode, name = header.split(maxsplit=1)
+        # get 20-byte binary hash
+        bin_hash = tree_data[null_idx+1:null_idx+21]
+        hex_hash = bin_hash.hex()
+        pos = null_idx + 21
+        
+        full_path = os.path.join(base_path, name)
+        
+        if mode == '40000':  # directory
+            os.makedirs(full_path, exist_ok=True)
+            restore_tree(hex_hash, full_path)
+        else:  # file
+            obj_type, content = read_object(hex_hash)
+            if obj_type == 'blob':
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, 'wb') as f:
+                    f.write(content)
+
+def revert_to_commit(commit_hash):
+    """revert working directory to a specific commit"""
+    tree_hash = get_commit_tree(commit_hash)
+    if not tree_hash:
+        print(f"error: commit {commit_hash} has no tree")
+        return False
+        
+    # restore files from the tree
+    restore_tree(tree_hash)
+    
+    # update index to match the commit
+    index_entries = {}
+    def collect_entries(tree_hash, base_path=''):
+        obj_type, tree_data = read_object(tree_hash)
+        if obj_type != 'tree':
+            return
+            
+        pos = 0
+        while pos < len(tree_data):
+            null_idx = tree_data.find(b'\0', pos)
+            if null_idx == -1:
+                break
+                
+            header = tree_data[pos:null_idx].decode()
+            mode, name = header.split(maxsplit=1)
+            bin_hash = tree_data[null_idx+1:null_idx+21]
+            hex_hash = bin_hash.hex()
+            pos = null_idx + 21
+            
+            full_path = os.path.join(base_path, name).replace('\\', '/')
+            
+            if mode == '40000':  # directory
+                collect_entries(hex_hash, full_path)
+            else:  # file
+                index_entries[full_path] = {
+                    'mode': mode,
+                    'blob_hash': hex_hash,
+                    'timestamp': os.path.getmtime(full_path) if os.path.exists(full_path) else time.time()
+                }
+    
+    collect_entries(tree_hash)
+    with open(index_file, 'w') as f:
+        for path, data in index_entries.items():
+            f.write(f"{data['mode']} {data['blob_hash']} {int(data['timestamp'])} {path}\n")
+    
+    with open(head_file, 'w') as f:
+        f.write(commit_hash)
+    return True
+
+def compute_file_hash(file_path):
+    """compute file hash without storing as blob"""
+    content = read_file(file_path)
+    if content is None:
+        return None
+    header = f"blob {len(content)}\0".encode()
+    combined_data = header + content
+    return hashlib.sha1(combined_data).hexdigest()
+
+def get_working_directory_files():
+    """get all files in working directory except .rev"""
+    wd_files = set()
+    for dirpath, _, filenames in os.walk('.'):
+        # skip .rev directory
+        if repo_dir in dirpath.split(os.sep):
+            continue
+        for filename in filenames:
+            full_path = os.path.join(dirpath, filename)
+            rel_path = os.path.relpath(full_path).replace('\\', '/')
+            wd_files.add(rel_path)
+    return wd_files
+
+def get_status():
+    """get repository status: modified and untracked files"""
+    index_entries = read_index()
+    wd_files = get_working_directory_files()
+    
+    modified = []
+    untracked = list(wd_files - set(index_entries.keys()))
+    
+    # check modified files
+    for path, entry in index_entries.items():
+        if path in wd_files:
+            current_hash = compute_file_hash(path)
+            if current_hash != entry['blob_hash']:
+                modified.append(path)
+    
+    return {
+        'modified': modified,
+        'untracked': untracked
+    }
