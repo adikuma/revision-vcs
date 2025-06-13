@@ -2,6 +2,7 @@
 import argparse
 import sys
 import os
+import time
 from rev.rev_lib.repository import (
     init_repository, 
     create_blob, 
@@ -9,7 +10,9 @@ from rev.rev_lib.repository import (
     commit_changes,
     get_head_commit,
     revert_to_commit,
-    get_status
+    get_status,
+    get_commit_history,
+    read_object
 )
 
 def main():
@@ -66,11 +69,34 @@ def main():
             print(f"committed: {commit_hash[:7]} {args.message}")
             
     elif args.command == "log":
-        commit_hash = get_head_commit()
-        if commit_hash:
-            print(f"commit {commit_hash[:7]} (head)")
-        else:
+        history = get_commit_history()
+        if not history:
             print("no commits yet")
+            return
+            
+        for commit_hash in history:
+            obj_type, content = read_object(commit_hash)
+            if obj_type != 'commit':
+                continue
+                
+            lines = content.decode().splitlines()
+            message = ""
+            author = ""
+            date = ""
+            
+            for line in lines:
+                if line.startswith('author '):
+                    parts = line.split()
+                    timestamp = int(parts[-1])
+                    author = ' '.join(parts[1:-1])
+                    date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+                elif line and not line.startswith(('tree ', 'parent ', 'committer ')):
+                    message = line
+                    
+            print(f"commit {commit_hash[:7]}")
+            print(f"author: {author}")
+            print(f"date:   {date}")
+            print(f"    {message}\n")
             
     elif args.command == "status":
         status_info = get_status()

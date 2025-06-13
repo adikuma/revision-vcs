@@ -226,9 +226,6 @@ def commit_changes(message, author="user <user@example.com>"):
     commit_hash = create_commit(tree_hash, parent_hash, message, author)
     # update head reference
     update_head_ref(commit_hash)
-    # clear staging area
-    with open(index_file, "w"):
-        pass
     return commit_hash
 
 def read_object(sha):
@@ -384,3 +381,22 @@ def get_status():
         'modified': modified,
         'untracked': untracked
     }
+
+def get_commit_history():
+    """get full commit history starting from head"""
+    history = []
+    current = get_head_commit()
+    while current:
+        history.append(current)
+        # get parent commit
+        obj_type, content = read_object(current)
+        if obj_type != 'commit':
+            break
+        lines = content.decode().splitlines()
+        parent = None
+        for line in lines:
+            if line.startswith('parent '):
+                parent = line.split()[1]
+                break
+        current = parent
+    return history
