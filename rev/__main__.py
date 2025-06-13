@@ -2,7 +2,7 @@
 import argparse
 import sys
 import os
-from rev_lib.repository import (
+from .rev_lib.repository import (
     init_repository, 
     create_blob, 
     update_index,
