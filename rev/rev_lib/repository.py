@@ -153,19 +153,16 @@ def create_tree(index_entries):
 
 def create_commit(tree_hash, parent_hash, message, author):
     """create commit object"""
-    # build commit content
-    lines = [
-        f"tree {tree_hash}",
-        f"parent {parent_hash}" if parent_hash else "",
-        f"author {author} {int(time.time())}",
-        f"committer {author} {int(time.time())}",
-        "",
-        message
-    ]
-    content = "\n".join(filter(None, lines)).encode()
+    # Build commit content with proper formatting
+    content = f"tree {tree_hash}\n"
+    if parent_hash:
+        content += f"parent {parent_hash}\n"
+    content += f"author {author} {int(time.time())}\n"
+    content += f"committer {author} {int(time.time())}\n"
+    content += f"\n{message}"
     
     header = f"commit {len(content)}\0".encode()
-    full_data = header + content
+    full_data = header + content.encode()
     sha = hashlib.sha1(full_data).hexdigest()
     
     # store commit object
@@ -251,8 +248,8 @@ def get_commit_tree(commit_hash):
     if obj_type != 'commit':
         return None
         
-    lines = commit_data.decode().splitlines()
-    for line in lines:
+    # Find the tree line in the commit data
+    for line in commit_data.decode().splitlines():
         if line.startswith('tree '):
             return line.split()[1]
     return None
